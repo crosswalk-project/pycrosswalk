@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <p>Example</p>
+    <div id="output"></div>
+    <script>
+      function log(message) {
+        document.getElementById("output").innerHTML =
+            document.getElementById("output").innerHTML + "<br/>" + message;
+      }
+      example.startTimeTick("async", function(result) {
+         log(result);
+      });
+
+      log(example.getTimeSync("sync"));
+    </script>
+  </body>
+</html>

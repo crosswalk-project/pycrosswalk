@@ -1,0 +1,13 @@
+#!/bin/bash
+# Copyright (c) 2014 Intel Corporation. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+if [ ! `which gyp` ]; then
+   echo -e "\nPlease make sure gyp is in your PATH. It is usually found at CHROMIUM_SRC/tools/gyp."
+   exit 1
+fi
+
+echo To build use: ninja -C out/Default
+
+gyp $@ --depth=. pycrosswalk.gyp
