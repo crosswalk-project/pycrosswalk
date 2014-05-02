@@ -1,0 +1,60 @@
+#!/usr/bin/make -f
+
+DEB_HOST_GNU_TYPE  ?= $(shell dpkg-architecture -qDEB_HOST_GNU_TYPE)
+DEB_BUILD_GNU_TYPE ?= $(shell dpkg-architecture -qDEB_BUILD_GNU_TYPE)
+DEB_BUILD_ARCH     ?= $(shell dpkg-architecture -qDEB_BUILD_ARCH)
+DEB_HOST_ARCH      ?= $(shell dpkg-architecture -qDEB_HOST_ARCH)
+DEB_HOST_ARCH_BITS ?= $(shell dpkg-architecture -qDEB_HOST_ARCH_BITS)
+
+SRC_DIR := $(CURDIR)/$(DEB_TAR_SRCDIR)
+NINJA   := ninja
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+clean:
+	dh_testdir
+	dh_testroot
+
+	rm -rf out
+	rm -f build-stamp
+
+	dh_clean
+
+build: build-arch build-indep
+
+build-arch: build-stamp
+
+build-indep: build-stamp
+
+build-stamp:
+	dh_testdir
+
+	./configure
+	$(NINJA) -C out/Default
+
+	touch $@
+
+install: install-stamp
+
+install-stamp: build-stamp
+
+binary-arch: build install
+	dh_testdir
+	dh_testroot
+	dh_installdocs -a
+	dh_installchangelogs -a
+	dh_install -a --sourcedir=.
+	dh_strip -a
+	dh_link -a
+	dh_compress -a
+	dh_fixperms -a
+	dh_installdeb -a
+	dh_shlibdeps -a
+	dh_gencontrol -a
+	dh_md5sums -a
+	dh_builddeb -a
+
+binary: binary-indep binary-arch
+
+.PHONY: build clean binary binary-indep binary-arch

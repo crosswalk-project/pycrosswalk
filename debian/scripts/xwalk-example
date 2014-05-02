@@ -1,0 +1,3 @@
+#!/bin/bash
+
+exec xwalk --external-extensions-path=/usr/lib/xwalk-example /usr/lib/xwalk-example/index.html

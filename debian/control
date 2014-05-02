@@ -1,0 +1,15 @@
+Source: pycrosswalk
+Section: web
+Priority: optional
+Maintainer: Thiago Marcos P. Santos <thiago.santos@intel.com>
+Homepage: https://crosswalk-project.org/
+Standards-Version: 3.9.4
+Build-Depends: libpython3.3-dev, pkg-config, ninja-build, gyp, debhelper (>= 9)
+
+Package: pycrosswalk
+Architecture: any
+Pre-Depends: dpkg (>= 1.15.6)
+Depends: libpython3.3, crosswalk, ${shlibs:Depends}, ${misc:Depends}
+Description: Crosswalk python extension loader
+ Crosswalk is a web runtime for ambitious HTML5 applications. This plugin allows
+ you to write and load Crosswalk extensions written in python.

@@ -10,4 +10,4 @@ fi
 
 echo To build use: ninja -C out/Default
 
-gyp $@ --depth=. pycrosswalk.gyp
+GYP_GENERATORS=ninja gyp $@ --depth=. pycrosswalk.gyp
