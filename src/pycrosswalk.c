@@ -165,7 +165,7 @@ static void shutdown(XW_Extension extension) {
 int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   // Hack to avoid missing symbols if the python script we are loading tries
   // to do something funny with cpython.
-  void* handle = dlopen("libpython3.3m.so", RTLD_LAZY | RTLD_GLOBAL);
+  void* handle = dlopen("libpython3.3m.so.1", RTLD_LAZY | RTLD_GLOBAL);
   if (!handle) {
     fprintf(stderr, "Could not load python shared library.\n");
     return XW_ERROR;
