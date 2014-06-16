@@ -62,10 +62,13 @@ static PyObject* py_set_extension_name(PyObject* self, PyObject* args) {
   if (g_extension_name)
     Py_RETURN_FALSE;
 
-  if(!PyArg_ParseTuple(args, "s", &g_extension_name)) {
+  char* name = NULL;
+  if(!PyArg_ParseTuple(args, "s", &name)) {
     PyErr_Print();
     Py_RETURN_FALSE;
   }
+
+  g_extension_name = strdup(name);
 
   Py_RETURN_TRUE;
 }
@@ -74,10 +77,13 @@ static PyObject* py_set_javascript_api(PyObject* self, PyObject* args) {
   if (g_javascript_api)
     Py_RETURN_FALSE;
 
-  if(!PyArg_ParseTuple(args, "s", &g_javascript_api)) {
+  char* api = NULL;
+  if(!PyArg_ParseTuple(args, "s", &api)) {
     PyErr_Print();
     Py_RETURN_FALSE;
   }
+
+  g_javascript_api = strdup(api);
 
   Py_RETURN_TRUE;
 }
@@ -160,6 +166,9 @@ static void shutdown(XW_Extension extension) {
   Py_DECREF(g_py_sync_messaging);
   Py_DECREF(g_py_messaging);
   Py_Finalize();
+
+  free(g_extension_name);
+  free(g_javascript_api);
 }
 
 int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
