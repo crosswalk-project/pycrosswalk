@@ -9,6 +9,7 @@
       'sources': [
         'src/pycrosswalk.c',
         'xwalk/XW_Extension.h',
+        'xwalk/XW_Extension_Runtime.h',
         'xwalk/XW_Extension_SyncMessage.h',
       ],
       'cflags': [
