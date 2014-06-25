@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <dlfcn.h>
+#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include <Python.h>
 
 #include "xwalk/XW_Extension.h"
+#include "xwalk/XW_Extension_Runtime.h"
 #include "xwalk/XW_Extension_SyncMessage.h"
 
 // XWalk hooks
@@ -171,6 +173,53 @@ static void shutdown(XW_Extension extension) {
   free(g_javascript_api);
 }
 
+static int load_python_extension(XW_Extension extension,
+                                  XW_GetInterface get_interface) {
+  const XW_Internal_RuntimeInterface* runtime =
+      get_interface(XW_INTERNAL_RUNTIME_INTERFACE);
+
+  char extension_path[4096];
+  runtime->GetRuntimeVariableString(
+      extension, "extension_path", extension_path, sizeof(extension_path));
+
+  if (strlen(extension_path) == 0) {
+    fprintf(stderr, "Runtime variable 'extension_path' not set.\n");
+    return 0;
+  }
+
+  // Removed the "quotes" added by the extension framework (JSON wrapper).
+  size_t extension_path_size = strlen(extension_path);
+  strncpy(extension_path, &extension_path[1], extension_path_size);
+  extension_path[extension_path_size - 2] = '\0';
+
+  char* extension_plugin_name = basename(extension_path);
+  size_t extension_plugin_name_size = strlen(extension_plugin_name);
+
+  // Remove the lib prefix and the .so extension from the file name.
+  // This can probably be done in a more portable way calling the python
+  // file path manipulation libraries directly. Currently will only
+  // work on Linux.
+  char module_name[1024];
+  strncpy(module_name, &extension_plugin_name[3],
+      extension_plugin_name_size - 6);
+  module_name[extension_plugin_name_size - 6] = '\0';
+
+  PyObject* search_path_list = PySys_GetObject("path");
+  PyObject* search_path_object = PyUnicode_FromString(dirname(extension_path));
+
+  PyList_Append(search_path_list, search_path_object);
+  Py_DECREF(search_path_object);
+
+  PyObject* module = PyImport_ImportModule(module_name);
+  if (!module) {
+    PyErr_Print();
+    return 0;
+  }
+  Py_DECREF(module);
+
+  return 1;
+}
+
 int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   // Hack to avoid missing symbols if the python script we are loading tries
   // to do something funny with cpython.
@@ -181,28 +230,13 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   }
   dlclose(handle);
 
-  char* search_path_string = getenv("PYXWALK_PATH");
-  if (!search_path_string) {
-    fprintf(stderr, "PYXWALK_PATH not set.\n");
-    return XW_ERROR;
-  }
-
   Py_Initialize();
-  PyObject* search_path_list = PySys_GetObject("path");
-  PyObject* search_path_object = PyUnicode_FromString(search_path_string);
-
-  PyList_Append(search_path_list, search_path_object);
-  Py_DECREF(search_path_object);
 
   PyObject* xwalk_module = PyModule_Create(&PyXWalkModule);
   PyDict_SetItemString(PyImport_GetModuleDict(), PyXWalkModule.m_name, xwalk_module);
 
-  PyObject* module = PyImport_ImportModule("extension");
-  if (!module) {
-    PyErr_Print();
-    return XW_ERROR;
-  }
-  Py_DECREF(module);
+  if (!load_python_extension(extension, get_interface))
+      return XW_ERROR;
 
   if (!g_extension_name || !g_javascript_api) {
     fprintf(stderr, "Extension name or JavaScript API not set.\n");
