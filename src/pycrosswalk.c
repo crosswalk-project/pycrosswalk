@@ -21,6 +21,8 @@ const XW_Internal_SyncMessagingInterface* g_xw_sync_messaging = NULL;
 // Python hooks
 PyObject* g_py_messaging = NULL;
 PyObject* g_py_sync_messaging = NULL;
+PyObject* g_py_instance_created = NULL;
+PyObject* g_py_instance_destroyed = NULL;
 
 char* g_extension_name = NULL;
 char* g_javascript_api = NULL;
@@ -30,6 +32,8 @@ static PyObject* py_set_javascript_api(PyObject* self, PyObject* args);
 static PyObject* py_post_message(PyObject* self, PyObject* args);
 static PyObject* py_set_message_callback(PyObject* self, PyObject* args);
 static PyObject* py_set_sync_message_callback(PyObject* self, PyObject* args);
+static PyObject* py_set_instance_created_callback(PyObject* self, PyObject* args);
+static PyObject* py_set_instance_destroyed_callback(PyObject* self, PyObject* args);
 
 static PyMethodDef PyXWalkMethods[] = {
   {"SetExtensionName", py_set_extension_name, METH_VARARGS, ""},
@@ -37,6 +41,8 @@ static PyMethodDef PyXWalkMethods[] = {
   {"PostMessage", py_post_message, METH_VARARGS, ""},
   {"SetMessageCallback", py_set_message_callback, METH_VARARGS, ""},
   {"SetSyncMessageCallback", py_set_sync_message_callback, METH_VARARGS, ""},
+  {"SetInstanceCreatedCallback", py_set_instance_created_callback, METH_VARARGS, ""},
+  {"SetInstanceDestroyedCallback", py_set_instance_destroyed_callback, METH_VARARGS, ""},
   {NULL, NULL, 0, NULL}
 };
 
@@ -116,6 +122,32 @@ static PyObject* py_set_sync_message_callback(PyObject* self, PyObject* args) {
   Py_RETURN_TRUE;
 }
 
+static PyObject* py_set_instance_created_callback(PyObject* self, PyObject* args) {
+  if (g_py_instance_created)
+    Py_RETURN_FALSE;
+
+  if(!PyArg_ParseTuple(args, "O", &g_py_instance_created)) {
+    PyErr_Print();
+    Py_RETURN_FALSE;
+  }
+  Py_INCREF(g_py_instance_created);
+
+  Py_RETURN_TRUE;
+}
+
+static PyObject* py_set_instance_destroyed_callback(PyObject* self, PyObject* args) {
+  if (g_py_instance_destroyed)
+    Py_RETURN_FALSE;
+
+  if(!PyArg_ParseTuple(args, "O", &g_py_instance_destroyed)) {
+    PyErr_Print();
+    Py_RETURN_FALSE;
+  }
+  Py_INCREF(g_py_instance_destroyed);
+
+  Py_RETURN_TRUE;
+}
+
 static char* py_handle_message(XW_Instance instance,
                                PyObject* callback,
                                const char* message) {
@@ -164,7 +196,39 @@ static void xw_handle_sync_message(XW_Instance instance, const char* message) {
     g_xw_sync_messaging->SetSyncReply(instance, "");
 }
 
-static void shutdown(XW_Extension extension) {
+static char* py_handle_instance(XW_Instance instance, PyObject* callback) {
+  if (!callback) {
+    fprintf(stderr, "Handle instance (created/destroyed) not set!\n");
+    return;
+  }
+
+  PyObject* instance_object = PyLong_FromLong((long) instance);
+  PyObject* args = PyTuple_Pack(1, instance_object);
+  Py_DECREF(instance_object);
+
+  if (!args) {
+    PyErr_Print();
+    return;
+  }
+
+  PyObject* result_object = PyObject_CallObject(callback, args);
+  Py_DECREF(args);
+
+  if (!result_object)
+    PyErr_Print();
+
+  return;
+}
+
+static void xw_handle_instance_created(XW_Instance instance) {
+  py_handle_instance(instance, g_py_instance_created);
+}
+
+static void xw_handle_instance_destroyed(XW_Instance instance) {
+  py_handle_instance(instance, g_py_instance_destroyed);
+}
+
+static void xw_handle_shutdown(XW_Extension extension) {
   Py_DECREF(g_py_sync_messaging);
   Py_DECREF(g_py_messaging);
   Py_Finalize();
@@ -247,7 +311,8 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   core->SetExtensionName(extension, g_extension_name);
   core->SetJavaScriptAPI(extension, g_javascript_api);
 
-  core->RegisterShutdownCallback(extension, shutdown);
+  core->RegisterInstanceCallbacks(extension, xw_handle_instance_created, xw_handle_instance_destroyed);
+  core->RegisterShutdownCallback(extension, xw_handle_shutdown);
 
   g_xw_messaging = get_interface(XW_MESSAGING_INTERFACE);
   g_xw_messaging->Register(extension, xw_handle_message);
