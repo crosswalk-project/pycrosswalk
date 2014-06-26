@@ -9,23 +9,26 @@
 #include <string.h>
 
 #include <Python.h>
+#include <callback.h>
 
 #include "xwalk/XW_Extension.h"
 #include "xwalk/XW_Extension_Runtime.h"
 #include "xwalk/XW_Extension_SyncMessage.h"
 
+#define EXTENSION_MAX 64
+
 // XWalk hooks
-const XW_MessagingInterface* g_xw_messaging = NULL;
-const XW_Internal_SyncMessagingInterface* g_xw_sync_messaging = NULL;
+static const XW_MessagingInterface* g_xw_messaging = NULL;
+static const XW_Internal_SyncMessagingInterface* g_xw_sync_messaging = NULL;
 
 // Python hooks
-PyObject* g_py_messaging = NULL;
-PyObject* g_py_sync_messaging = NULL;
-PyObject* g_py_instance_created = NULL;
-PyObject* g_py_instance_destroyed = NULL;
+static PyObject* g_py_messaging[EXTENSION_MAX];
+static PyObject* g_py_sync_messaging[EXTENSION_MAX];
+static PyObject* g_py_instance_created = NULL;
+static PyObject* g_py_instance_destroyed = NULL;
 
-char* g_extension_name = NULL;
-char* g_javascript_api = NULL;
+static char* g_extension_name = NULL;
+static char* g_javascript_api = NULL;
 
 static PyObject* py_set_extension_name(PyObject* self, PyObject* args);
 static PyObject* py_set_javascript_api(PyObject* self, PyObject* args);
@@ -97,27 +100,37 @@ static PyObject* py_set_javascript_api(PyObject* self, PyObject* args) {
 }
 
 static PyObject* py_set_message_callback(PyObject* self, PyObject* args) {
-  if (g_py_messaging)
-    Py_RETURN_FALSE;
+  PyObject* callback = NULL;
+  int instance = 0;
 
-  if(!PyArg_ParseTuple(args, "O", &g_py_messaging)) {
+  if(!PyArg_ParseTuple(args, "lO", &instance, &callback)) {
     PyErr_Print();
     Py_RETURN_FALSE;
   }
-  Py_INCREF(g_py_messaging);
+
+  if (instance > EXTENSION_MAX || g_py_messaging[instance])
+    Py_RETURN_FALSE;
+
+  Py_INCREF(callback);
+  g_py_messaging[instance] = callback;
 
   Py_RETURN_TRUE;
 }
 
 static PyObject* py_set_sync_message_callback(PyObject* self, PyObject* args) {
-  if (g_py_sync_messaging)
-    Py_RETURN_FALSE;
+  PyObject* callback = NULL;
+  int instance = 0;
 
-  if(!PyArg_ParseTuple(args, "O", &g_py_sync_messaging)) {
+  if(!PyArg_ParseTuple(args, "lO", &instance, &callback)) {
     PyErr_Print();
     Py_RETURN_FALSE;
   }
-  Py_INCREF(g_py_sync_messaging);
+
+  if (instance > EXTENSION_MAX || g_py_sync_messaging[instance])
+    Py_RETURN_FALSE;
+
+  Py_INCREF(callback);
+  g_py_sync_messaging[instance] = callback;
 
   Py_RETURN_TRUE;
 }
@@ -182,13 +195,21 @@ static char* py_handle_message(XW_Instance instance,
 }
 
 static void xw_handle_message(XW_Instance instance, const char* message) {
-  char* result = py_handle_message(instance, g_py_messaging, message);
+  if (!g_py_messaging[instance])
+    return;
+
+  char* result = py_handle_message(instance, g_py_messaging[instance], message);
   if (result)
     free(result);
 }
 
 static void xw_handle_sync_message(XW_Instance instance, const char* message) {
-  char* result = py_handle_message(instance, g_py_sync_messaging, message);
+  if (!g_py_sync_messaging[instance]) {
+    g_xw_sync_messaging->SetSyncReply(instance, "");
+    return;
+  }
+
+  char* result = py_handle_message(instance, g_py_sync_messaging[instance], message);
   if (result) {
     g_xw_sync_messaging->SetSyncReply(instance, result);
     free(result);
@@ -220,21 +241,8 @@ static char* py_handle_instance(XW_Instance instance, PyObject* callback) {
   return;
 }
 
-static void xw_handle_instance_created(XW_Instance instance) {
-  py_handle_instance(instance, g_py_instance_created);
-}
-
-static void xw_handle_instance_destroyed(XW_Instance instance) {
-  py_handle_instance(instance, g_py_instance_destroyed);
-}
-
 static void xw_handle_shutdown(XW_Extension extension) {
-  Py_DECREF(g_py_sync_messaging);
-  Py_DECREF(g_py_messaging);
   Py_Finalize();
-
-  free(g_extension_name);
-  free(g_javascript_api);
 }
 
 static int load_python_extension(XW_Extension extension,
@@ -284,6 +292,15 @@ static int load_python_extension(XW_Extension extension,
   return 1;
 }
 
+static void instance_closure(PyObject* callback, va_alist args) {
+  va_start_void(args);
+
+  int instance = va_arg_int(args);
+  py_handle_instance(instance, callback);
+
+  va_return_void(args);
+}
+
 int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   // Hack to avoid missing symbols if the python script we are loading tries
   // to do something funny with cpython.
@@ -308,10 +325,29 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   }
 
   const XW_CoreInterface* core = get_interface(XW_CORE_INTERFACE);
-  core->SetExtensionName(extension, g_extension_name);
-  core->SetJavaScriptAPI(extension, g_javascript_api);
 
-  core->RegisterInstanceCallbacks(extension, xw_handle_instance_created, xw_handle_instance_destroyed);
+  core->SetExtensionName(extension, g_extension_name);
+  free(g_extension_name);
+  g_extension_name = NULL;
+
+  core->SetJavaScriptAPI(extension, g_javascript_api);
+  free(g_javascript_api);
+  g_javascript_api = NULL;
+
+  // We need to create a closure here otherwise the callback is going to be
+  // replaced by the next python extension, which makes it impossible to
+  // support multiple extensions otherwise. I'm leaking the closure structure
+  // and the callback object, but their lifecycle is the same as the extension
+  // process (so effectively the memory won't leak).
+  int (*instance_created)(int) = alloc_callback(&instance_closure, g_py_instance_created);
+  g_py_instance_created = NULL;
+
+  int (*instance_destroyed)(int) = alloc_callback(&instance_closure, g_py_instance_destroyed);
+  g_py_instance_destroyed = NULL;
+
+  core->RegisterInstanceCallbacks(extension,
+      (XW_CreatedInstanceCallback) instance_created, (XW_CreatedInstanceCallback) instance_destroyed);
+
   core->RegisterShutdownCallback(extension, xw_handle_shutdown);
 
   g_xw_messaging = get_interface(XW_MESSAGING_INTERFACE);

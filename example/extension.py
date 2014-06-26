@@ -29,7 +29,8 @@ def HandleSyncMessage(instance, message):
 
 
 def HandleInstanceCreated(instance):
-  return
+  xwalk.SetMessageCallback(instance, HandleMessage)
+  xwalk.SetSyncMessageCallback(instance, HandleSyncMessage)
 
 
 def HandleInstanceDestroyed(instance):
@@ -40,8 +41,6 @@ def Main():
   xwalk.SetExtensionName("example")
   xwalk.SetInstanceCreatedCallback(HandleInstanceCreated)
   xwalk.SetInstanceDestroyedCallback(HandleInstanceDestroyed)
-  xwalk.SetMessageCallback(HandleMessage)
-  xwalk.SetSyncMessageCallback(HandleSyncMessage)
   xwalk.SetJavaScriptAPI(
     "var listener = null;"
     "extension.setMessageListener(function(msg) {"

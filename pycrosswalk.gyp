@@ -21,7 +21,7 @@
           '<!@(pkg-config --libs-only-L --libs-only-other python-3.3)',
         ],
         'libraries': [
-          '<!@(pkg-config --libs-only-l python-3.3)',
+          '<!@(pkg-config --libs-only-l python-3.3) -lcallback',
         ],
       },
     },
