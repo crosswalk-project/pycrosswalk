@@ -10,4 +10,13 @@ fi
 
 echo To build use: ninja -C out/Default
 
-GYP_GENERATORS=ninja gyp $@ --depth=. pycrosswalk.gyp
+# Use most recent Python version. Can be overridden by passing
+# -D python_version=<version> to configure as argument.
+python_version=`pkg-config --list-all | grep '^python-[0-9]*\.[0-9]* ' | sed -e 's/python-//' -e 's/ .*//' | sort | tail -1`
+
+if [ ! "$python_version" ]; then
+   echo -e "\nPlease make sure that Python development files are found by pkg-config."
+   exit 1
+fi
+
+GYP_GENERATORS=ninja gyp -D python_version=$python_version $@ --depth=. pycrosswalk.gyp

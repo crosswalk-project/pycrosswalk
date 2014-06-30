@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <Python.h>
+
 #include <dlfcn.h>
 #include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include <Python.h>
 #include <callback.h>
 
 #include "xwalk/XW_Extension.h"
@@ -49,11 +50,15 @@ static PyMethodDef PyXWalkMethods[] = {
   {NULL, NULL, 0, NULL}
 };
 
+static const char PY_XWALK_MODULE_NAME[] = "xwalk";
+
+#if PY_MAJOR_VERSION >= 3
 static struct PyModuleDef PyXWalkModule = {
   PyModuleDef_HEAD_INIT,
-  "xwalk", "", -1, PyXWalkMethods,
+  PY_XWALK_MODULE_NAME, "", -1, PyXWalkMethods,
   NULL, NULL, NULL, NULL
 };
+#endif
 
 static PyObject* py_post_message(PyObject* self, PyObject* args) {
   int instance;
@@ -185,7 +190,13 @@ static char* py_handle_message(XW_Instance instance,
 
   char* pass_string = NULL;
 
-  char* result_string = PyUnicode_AsUTF8(result_object);
+#if PY_MAJOR_VERSION >= 3
+  char* result_string = result_object != Py_None ? PyUnicode_AsUTF8(result_object) : NULL;
+#else
+  PyObject* str = result_object != Py_None ? PyUnicode_AsUTF8String(result_object) : NULL;
+  char* result_string = str ? PyBytes_AsString(str) : NULL;
+#endif
+      ;
   if (result_string)
     pass_string = strdup(result_string);
 
@@ -304,7 +315,13 @@ static void instance_closure(PyObject* callback, va_alist args) {
 int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   // Hack to avoid missing symbols if the python script we are loading tries
   // to do something funny with cpython.
-  void* handle = dlopen("libpython3.3m.so.1", RTLD_LAZY | RTLD_GLOBAL);
+  void* handle = dlopen(
+#if PY_MAJOR_VERSION >= 3
+                        "libpython3.3m.so.1",
+#else
+                        "libpython2.7.so.1",
+#endif
+                        RTLD_LAZY | RTLD_GLOBAL);
   if (!handle) {
     fprintf(stderr, "Could not load python shared library.\n");
     return XW_ERROR;
@@ -313,8 +330,12 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
 
   Py_Initialize();
 
+#if PY_MAJOR_VERSION >= 3
   PyObject* xwalk_module = PyModule_Create(&PyXWalkModule);
-  PyDict_SetItemString(PyImport_GetModuleDict(), PyXWalkModule.m_name, xwalk_module);
+#else
+  PyObject *xwalk_module = Py_InitModule(PY_XWALK_MODULE_NAME, PyXWalkMethods);
+#endif
+  PyDict_SetItemString(PyImport_GetModuleDict(), PY_XWALK_MODULE_NAME, xwalk_module);
 
   if (!load_python_extension(extension, get_interface))
       return XW_ERROR;

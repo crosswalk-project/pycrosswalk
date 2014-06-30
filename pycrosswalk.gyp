@@ -13,15 +13,17 @@
         'xwalk/XW_Extension_SyncMessage.h',
       ],
       'cflags': [
-        '<!@(pkg-config --cflags python-3.3)',
+        '<!@(pkg-config --cflags python-<(python_version))',
+        '-g',
         '-fPIC',
       ],
       'link_settings': {
         'ldflags': [
-          '<!@(pkg-config --libs-only-L --libs-only-other python-3.3)',
+          '<!@(pkg-config --libs-only-L --libs-only-other python-<(python_version))',
+          '-g',
         ],
         'libraries': [
-          '<!@(pkg-config --libs-only-l python-3.3) -lcallback',
+          '<!@(pkg-config --libs-only-l python-<(python_version)) -lcallback',
         ],
       },
     },
