@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <callback.h>
+#include <ffi.h>
 
 #include "xwalk/XW_Extension.h"
 #include "xwalk/XW_Extension_Runtime.h"
@@ -303,13 +303,39 @@ static int load_python_extension(XW_Extension extension,
   return 1;
 }
 
-static void instance_closure(PyObject* callback, va_alist args) {
-  va_start_void(args);
+static void instance_closure(ffi_cif *cif, void *ret, void* args[],
+                             void *callback) {
+  int instance = *(int *)args[0];
+  py_handle_instance(instance, (PyObject *)callback);
+}
 
-  int instance = va_arg_int(args);
-  py_handle_instance(instance, callback);
+static XW_CreatedInstanceCallback alloc_instance_callback(PyObject* callback) {
+  static int cif_initialized;
+  static ffi_cif cif;
+  static ffi_type *args[1];
+  if (!cif_initialized) {
+    args[0] = &ffi_type_sint;
+    if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1,
+                     &ffi_type_void, args) == FFI_OK) {
+      cif_initialized = 1;
+    }
+  }
 
-  va_return_void(args);
+  if (cif_initialized) {
+    ffi_closure *closure;
+    void *bound;
+
+    closure = ffi_closure_alloc(sizeof(ffi_closure), &bound);
+    if (closure) {
+      if (ffi_prep_closure_loc(closure, &cif, instance_closure,
+                               callback, bound) == FFI_OK) {
+        return (XW_CreatedInstanceCallback)bound;
+      }
+    }
+  }
+
+  fprintf(stderr, "allocating pycrosswalk closure failed");
+  return NULL;
 }
 
 int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
@@ -360,14 +386,13 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   // support multiple extensions otherwise. I'm leaking the closure structure
   // and the callback object, but their lifecycle is the same as the extension
   // process (so effectively the memory won't leak).
-  int (*instance_created)(int) = alloc_callback(&instance_closure, g_py_instance_created);
+  XW_CreatedInstanceCallback instance_created = alloc_instance_callback(g_py_instance_created);
   g_py_instance_created = NULL;
 
-  int (*instance_destroyed)(int) = alloc_callback(&instance_closure, g_py_instance_destroyed);
+  XW_DestroyedInstanceCallback instance_destroyed = alloc_instance_callback(g_py_instance_destroyed);
   g_py_instance_destroyed = NULL;
 
-  core->RegisterInstanceCallbacks(extension,
-      (XW_CreatedInstanceCallback) instance_created, (XW_CreatedInstanceCallback) instance_destroyed);
+  core->RegisterInstanceCallbacks(extension, instance_created, instance_destroyed);
 
   core->RegisterShutdownCallback(extension, xw_handle_shutdown);
 

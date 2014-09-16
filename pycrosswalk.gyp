@@ -23,7 +23,7 @@
           '-g',
         ],
         'libraries': [
-          '<!@(pkg-config --libs-only-l python-<(python_version)) -lcallback',
+          '<!@(pkg-config --libs-only-l python-<(python_version)) -lffi',
         ],
       },
     },
