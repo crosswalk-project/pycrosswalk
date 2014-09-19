@@ -52,6 +52,8 @@ static PyMethodDef PyXWalkMethods[] = {
 
 static const char PY_XWALK_MODULE_NAME[] = "xwalk";
 
+// #define LOGGING 1
+
 #if PY_MAJOR_VERSION >= 3
 static struct PyModuleDef PyXWalkModule = {
   PyModuleDef_HEAD_INIT,
@@ -69,6 +71,9 @@ static PyObject* py_post_message(PyObject* self, PyObject* args) {
     Py_RETURN_FALSE;
   }
 
+#ifdef LOGGING
+  fprintf(stderr, "pycrosswalk %d: posting message: %s\n", instance, result);
+#endif
   g_xw_messaging->PostMessage(instance, result);
 
   Py_RETURN_TRUE;
@@ -180,6 +185,9 @@ static char* py_handle_message(XW_Instance instance,
     return NULL;
   }
 
+#ifdef LOGGING
+  fprintf(stderr, "pycrosswalk %d: handling message: %s\n", instance, message);
+#endif
   PyObject* result_object = PyObject_CallObject(callback, args);
   Py_DECREF(args);
 
@@ -197,8 +205,12 @@ static char* py_handle_message(XW_Instance instance,
   char* result_string = str ? PyBytes_AsString(str) : NULL;
 #endif
       ;
-  if (result_string)
+  if (result_string) {
+#ifdef LOGGING
+    fprintf(stderr, "pycrosswalk %d: message handling result: %s\n", instance, result_string);
+#endif
     pass_string = strdup(result_string);
+  }
 
   Py_DECREF(result_object);
 
