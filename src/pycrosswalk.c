@@ -28,6 +28,18 @@ static PyObject* g_py_sync_messaging[EXTENSION_MAX];
 static PyObject* g_py_instance_created = NULL;
 static PyObject* g_py_instance_destroyed = NULL;
 
+// The thread in which XW_Initialize() gets called becomes the main thread.
+// It must release the global lock when returning to Crosswalk and restore
+// it when called again. Otherwise Python code called by other threads cannot
+// run. The assumption is that Crosswalk will always call the extension from
+// the same thread.
+//
+// Without this thread support, pycloudeebus in xwalk-launcher does not work:
+// the main thread is running the glib event loop in which twisted reacts
+// to D-Bus calls, while the second thread runs a Crosswalk event loop and
+// would hold the Python lock if we didn't release it.
+static PyThreadState* g_py_save_state;
+
 static char* g_extension_name = NULL;
 static char* g_javascript_api = NULL;
 
@@ -174,6 +186,8 @@ static PyObject* py_set_instance_destroyed_callback(PyObject* self, PyObject* ar
 static char* py_handle_message(XW_Instance instance,
                                PyObject* callback,
                                const char* message) {
+  char* pass_string = NULL;
+  PyEval_RestoreThread(g_py_save_state);
   PyObject* instance_object = PyLong_FromLong((long) instance);
   PyObject* message_object = PyUnicode_FromString(message);
   PyObject* args = PyTuple_Pack(2, instance_object, message_object);
@@ -182,7 +196,7 @@ static char* py_handle_message(XW_Instance instance,
 
   if (!args) {
     PyErr_Print();
-    return NULL;
+    goto done;
   }
 
 #ifdef LOGGING
@@ -193,10 +207,9 @@ static char* py_handle_message(XW_Instance instance,
 
   if (!result_object) {
     PyErr_Print();
-    return NULL;
+    goto done;
   }
 
-  char* pass_string = NULL;
 
 #if PY_MAJOR_VERSION >= 3
   char* result_string = result_object != Py_None ? PyUnicode_AsUTF8(result_object) : NULL;
@@ -214,6 +227,8 @@ static char* py_handle_message(XW_Instance instance,
 
   Py_DECREF(result_object);
 
+ done:
+  g_py_save_state = PyEval_SaveThread();
   return pass_string;
 }
 
@@ -245,14 +260,14 @@ static char* py_handle_instance(XW_Instance instance, PyObject* callback) {
     fprintf(stderr, "Handle instance (created/destroyed) not set!\n");
     return;
   }
-
+  PyEval_RestoreThread(g_py_save_state);
   PyObject* instance_object = PyLong_FromLong((long) instance);
   PyObject* args = PyTuple_Pack(1, instance_object);
   Py_DECREF(instance_object);
 
   if (!args) {
     PyErr_Print();
-    return;
+    goto done;
   }
 
   PyObject* result_object = PyObject_CallObject(callback, args);
@@ -261,10 +276,13 @@ static char* py_handle_instance(XW_Instance instance, PyObject* callback) {
   if (!result_object)
     PyErr_Print();
 
+ done:
+  g_py_save_state = PyEval_SaveThread();
   return;
 }
 
 static void xw_handle_shutdown(XW_Extension extension) {
+  PyEval_RestoreThread(g_py_save_state);
   Py_Finalize();
 }
 
@@ -367,6 +385,9 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   dlclose(handle);
 
   Py_Initialize();
+  PyEval_InitThreads();
+
+  int32_t result = XW_ERROR;
 
 #if PY_MAJOR_VERSION >= 3
   PyObject* xwalk_module = PyModule_Create(&PyXWalkModule);
@@ -414,5 +435,9 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   g_xw_sync_messaging = get_interface(XW_INTERNAL_SYNC_MESSAGING_INTERFACE);
   g_xw_sync_messaging->Register(extension, xw_handle_sync_message);
 
-  return XW_OK;
+  result = XW_OK;
+
+ done:
+  g_py_save_state = PyEval_SaveThread();
+  return result;
 }
