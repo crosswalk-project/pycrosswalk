@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <callback.h>
+#include <ffi.h>
 
 #include "xwalk/XW_Extension.h"
 #include "xwalk/XW_Extension_Runtime.h"
@@ -27,6 +27,18 @@ static PyObject* g_py_messaging[EXTENSION_MAX];
 static PyObject* g_py_sync_messaging[EXTENSION_MAX];
 static PyObject* g_py_instance_created = NULL;
 static PyObject* g_py_instance_destroyed = NULL;
+
+// The thread in which XW_Initialize() gets called becomes the main thread.
+// It must release the global lock when returning to Crosswalk and restore
+// it when called again. Otherwise Python code called by other threads cannot
+// run. The assumption is that Crosswalk will always call the extension from
+// the same thread.
+//
+// Without this thread support, pycloudeebus in xwalk-launcher does not work:
+// the main thread is running the glib event loop in which twisted reacts
+// to D-Bus calls, while the second thread runs a Crosswalk event loop and
+// would hold the Python lock if we didn't release it.
+static PyThreadState* g_py_save_state;
 
 static char* g_extension_name = NULL;
 static char* g_javascript_api = NULL;
@@ -52,6 +64,8 @@ static PyMethodDef PyXWalkMethods[] = {
 
 static const char PY_XWALK_MODULE_NAME[] = "xwalk";
 
+// #define LOGGING 1
+
 #if PY_MAJOR_VERSION >= 3
 static struct PyModuleDef PyXWalkModule = {
   PyModuleDef_HEAD_INIT,
@@ -69,6 +83,9 @@ static PyObject* py_post_message(PyObject* self, PyObject* args) {
     Py_RETURN_FALSE;
   }
 
+#ifdef LOGGING
+  fprintf(stderr, "pycrosswalk %d: posting message: %s\n", instance, result);
+#endif
   g_xw_messaging->PostMessage(instance, result);
 
   Py_RETURN_TRUE;
@@ -169,6 +186,8 @@ static PyObject* py_set_instance_destroyed_callback(PyObject* self, PyObject* ar
 static char* py_handle_message(XW_Instance instance,
                                PyObject* callback,
                                const char* message) {
+  char* pass_string = NULL;
+  PyEval_RestoreThread(g_py_save_state);
   PyObject* instance_object = PyLong_FromLong((long) instance);
   PyObject* message_object = PyUnicode_FromString(message);
   PyObject* args = PyTuple_Pack(2, instance_object, message_object);
@@ -177,18 +196,20 @@ static char* py_handle_message(XW_Instance instance,
 
   if (!args) {
     PyErr_Print();
-    return NULL;
+    goto done;
   }
 
+#ifdef LOGGING
+  fprintf(stderr, "pycrosswalk %d: handling message: %s\n", instance, message);
+#endif
   PyObject* result_object = PyObject_CallObject(callback, args);
   Py_DECREF(args);
 
   if (!result_object) {
     PyErr_Print();
-    return NULL;
+    goto done;
   }
 
-  char* pass_string = NULL;
 
 #if PY_MAJOR_VERSION >= 3
   char* result_string = result_object != Py_None ? PyUnicode_AsUTF8(result_object) : NULL;
@@ -197,11 +218,17 @@ static char* py_handle_message(XW_Instance instance,
   char* result_string = str ? PyBytes_AsString(str) : NULL;
 #endif
       ;
-  if (result_string)
+  if (result_string) {
+#ifdef LOGGING
+    fprintf(stderr, "pycrosswalk %d: message handling result: %s\n", instance, result_string);
+#endif
     pass_string = strdup(result_string);
+  }
 
   Py_DECREF(result_object);
 
+ done:
+  g_py_save_state = PyEval_SaveThread();
   return pass_string;
 }
 
@@ -233,14 +260,14 @@ static char* py_handle_instance(XW_Instance instance, PyObject* callback) {
     fprintf(stderr, "Handle instance (created/destroyed) not set!\n");
     return;
   }
-
+  PyEval_RestoreThread(g_py_save_state);
   PyObject* instance_object = PyLong_FromLong((long) instance);
   PyObject* args = PyTuple_Pack(1, instance_object);
   Py_DECREF(instance_object);
 
   if (!args) {
     PyErr_Print();
-    return;
+    goto done;
   }
 
   PyObject* result_object = PyObject_CallObject(callback, args);
@@ -249,10 +276,13 @@ static char* py_handle_instance(XW_Instance instance, PyObject* callback) {
   if (!result_object)
     PyErr_Print();
 
+ done:
+  g_py_save_state = PyEval_SaveThread();
   return;
 }
 
 static void xw_handle_shutdown(XW_Extension extension) {
+  PyEval_RestoreThread(g_py_save_state);
   Py_Finalize();
 }
 
@@ -303,13 +333,39 @@ static int load_python_extension(XW_Extension extension,
   return 1;
 }
 
-static void instance_closure(PyObject* callback, va_alist args) {
-  va_start_void(args);
+static void instance_closure(ffi_cif *cif, void *ret, void* args[],
+                             void *callback) {
+  int instance = *(int *)args[0];
+  py_handle_instance(instance, (PyObject *)callback);
+}
 
-  int instance = va_arg_int(args);
-  py_handle_instance(instance, callback);
+static XW_CreatedInstanceCallback alloc_instance_callback(PyObject* callback) {
+  static int cif_initialized;
+  static ffi_cif cif;
+  static ffi_type *args[1];
+  if (!cif_initialized) {
+    args[0] = &ffi_type_sint;
+    if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 1,
+                     &ffi_type_void, args) == FFI_OK) {
+      cif_initialized = 1;
+    }
+  }
 
-  va_return_void(args);
+  if (cif_initialized) {
+    ffi_closure *closure;
+    void *bound;
+
+    closure = ffi_closure_alloc(sizeof(ffi_closure), &bound);
+    if (closure) {
+      if (ffi_prep_closure_loc(closure, &cif, instance_closure,
+                               callback, bound) == FFI_OK) {
+        return (XW_CreatedInstanceCallback)bound;
+      }
+    }
+  }
+
+  fprintf(stderr, "allocating pycrosswalk closure failed");
+  return NULL;
 }
 
 int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
@@ -329,6 +385,9 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   dlclose(handle);
 
   Py_Initialize();
+  PyEval_InitThreads();
+
+  int32_t result = XW_ERROR;
 
 #if PY_MAJOR_VERSION >= 3
   PyObject* xwalk_module = PyModule_Create(&PyXWalkModule);
@@ -360,14 +419,13 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   // support multiple extensions otherwise. I'm leaking the closure structure
   // and the callback object, but their lifecycle is the same as the extension
   // process (so effectively the memory won't leak).
-  int (*instance_created)(int) = alloc_callback(&instance_closure, g_py_instance_created);
+  XW_CreatedInstanceCallback instance_created = alloc_instance_callback(g_py_instance_created);
   g_py_instance_created = NULL;
 
-  int (*instance_destroyed)(int) = alloc_callback(&instance_closure, g_py_instance_destroyed);
+  XW_DestroyedInstanceCallback instance_destroyed = alloc_instance_callback(g_py_instance_destroyed);
   g_py_instance_destroyed = NULL;
 
-  core->RegisterInstanceCallbacks(extension,
-      (XW_CreatedInstanceCallback) instance_created, (XW_CreatedInstanceCallback) instance_destroyed);
+  core->RegisterInstanceCallbacks(extension, instance_created, instance_destroyed);
 
   core->RegisterShutdownCallback(extension, xw_handle_shutdown);
 
@@ -377,5 +435,9 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   g_xw_sync_messaging = get_interface(XW_INTERNAL_SYNC_MESSAGING_INTERFACE);
   g_xw_sync_messaging->Register(extension, xw_handle_sync_message);
 
-  return XW_OK;
+  result = XW_OK;
+
+ done:
+  g_py_save_state = PyEval_SaveThread();
+  return result;
 }
