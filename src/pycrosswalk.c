@@ -373,7 +373,7 @@ int32_t XW_Initialize(XW_Extension extension, XW_GetInterface get_interface) {
   // to do something funny with cpython.
   void* handle = dlopen(
 #if PY_MAJOR_VERSION >= 3
-                        "libpython3.3m.so.1",
+                        "libpython3.4m.so.1",
 #else
                         "libpython2.7.so.1",
 #endif
