@@ -1,3 +1,18 @@
+pycrosswalk (1.2~trusty1) trusty; urgency=low
+
+  * Added the Crosswalk Extensions Runtime header
+  * Load the python module based on the plugin name
+  * Expose the instance_[created/destroyed] callback to python
+  * Support multiple python extensions
+  * fix Python.h include order
+  * support Python 2.7
+  * libffcall -> libffi
+  * adding some disabled logging
+  * enable multithreading
+  * Updated dependencies
+
+ -- Thiago Marcos P. Santos <thiago.santos@intel.com>  Fri, 24 Oct 2014 02:57:47 +0300
+
 pycrosswalk (1.1~saucy1) saucy; urgency=low
 
   * Fix the ownership of a string buffer
